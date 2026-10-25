@@ -1,0 +1,80 @@
+name: Build RHash (MSYS2 CLANG64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "rhash/RHash branch, tag or commit to build"
+        default: "master"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Set up MSYS2 (CLANG64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            make
+            git
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-binutils
+
+      - name: Clone rhash/RHash
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'master' }}
+          path: RHash
+
+      - name: Configure
+        working-directory: RHash
+        run: |
+          ./configure \
+            --cc=clang \
+            --disable-openssl \
+            --disable-gettext \
+            --extra-cflags="-O2" \
+            --extra-ldflags="-static"
+
+      - name: Build
+        working-directory: RHash
+        run: make -j"$(nproc)" build
+
+      - name: Strip and verify
+        working-directory: RHash
+        run: |
+          strip --strip-all rhash.exe
+          echo "--- version ---"
+          ./rhash.exe --version
+          echo "--- DLL dependencies (should be system DLLs only) ---"
+          objdump -p rhash.exe | grep "DLL Name"
+          echo "--- self-test: SHA-256 of 'abc' ---"
+          printf 'abc' | ./rhash.exe --sha256 -
+          ls -l rhash.exe
+
+      - name: Package
+        working-directory: RHash
+        run: |
+          mkdir -p ../dist
+          cp rhash.exe ../dist/
+          cp COPYING ../dist/
+          cd ../dist
+          sha256sum rhash.exe > rhash.exe.sha256
+          cat rhash.exe.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rhash-win64-clang-stripped
+          path: dist/
+          if-no-files-found: error
