@@ -37,6 +37,17 @@ jobs:
           ref: ${{ github.event.inputs.ref || 'master' }}
           path: RHash
 
+      - name: Patch SHA-NI detection for clang
+        working-directory: RHash
+        run: |
+          # clang reports __GNUC__=4.2, so HAS_GNUC(6, 3) is false and the CPUID
+          # leaf-7 query (which carries the SHA-NI bit) is compiled out. Without
+          # it SHA-1/SHA-256 silently fall back to the slow portable C code.
+          sed -i -E 's/^(#[[:space:]]*if[[:space:]]+)HAS_GNUC\(6, 3\)[[:space:]]*$/\1(HAS_GNUC(6, 3) || defined(__clang__))/' librhash/byte_order.c
+          echo "--- patched region ---"
+          grep -n -B1 -A3 'RHASH_CPUIDEX(id, sub_id, regs)' librhash/byte_order.c | head -12
+          git diff --stat
+
       - name: Configure
         working-directory: RHash
         run: |
@@ -79,6 +90,13 @@ jobs:
           ./rhash.exe --version
           echo "--- self-test: SHA-256 of 'abc' ---"
           printf 'abc' | ./rhash.exe --sha256 -
+
+      - name: Benchmark SHA-256
+        working-directory: RHash
+        run: |
+          # ~300 MBps = portable C code; >1000 MBps = SHA-NI is active.
+          # (Informational only: depends on the runner's CPU.)
+          ./rhash.exe --benchmark --sha256 || true
 
       - name: Package
         working-directory: RHash
