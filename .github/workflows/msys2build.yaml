@@ -1,4 +1,4 @@
-name: Build RHash (MSYS2 CLANG64)
+name: Build RHash (MSYS2 CLANG64 / UCRT64 / MINGW64)
 
 on:
   workflow_dispatch:
@@ -13,23 +13,45 @@ permissions:
 
 jobs:
   build:
+    name: ${{ matrix.name }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: clang64
+            msystem: CLANG64
+            cc: clang
+            strip: llvm-strip
+            packages: >-
+              mingw-w64-clang-x86_64-clang
+              mingw-w64-clang-x86_64-llvm
+              mingw-w64-clang-x86_64-binutils
+          - name: ucrt64
+            msystem: UCRT64
+            cc: gcc
+            strip: strip
+            packages: >-
+              mingw-w64-ucrt-x86_64-gcc
+              mingw-w64-ucrt-x86_64-binutils
+          - name: mingw64
+            msystem: MINGW64
+            cc: gcc
+            strip: strip
+            packages: >-
+              mingw-w64-x86_64-gcc
+              mingw-w64-x86_64-binutils
     defaults:
       run:
         shell: msys2 {0}
 
     steps:
-      - name: Set up MSYS2 (CLANG64)
+      - name: Set up MSYS2 (${{ matrix.msystem }})
         uses: msys2/setup-msys2@v2
         with:
-          msystem: CLANG64
+          msystem: ${{ matrix.msystem }}
           update: true
-          install: >-
-            make
-            git
-            mingw-w64-clang-x86_64-clang
-            mingw-w64-clang-x86_64-binutils
-            mingw-w64-clang-x86_64-llvm
+          install: make git ${{ matrix.packages }}
 
       - name: Clone rhash/RHash
         uses: actions/checkout@v4
@@ -38,11 +60,13 @@ jobs:
           path: RHash
 
       - name: Patch SHA-NI detection for clang
+        if: matrix.cc == 'clang'
         working-directory: RHash
         run: |
           # clang reports __GNUC__=4.2, so HAS_GNUC(6, 3) is false and the CPUID
           # leaf-7 query (which carries the SHA-NI bit) is compiled out. Without
           # it SHA-1/SHA-256 silently fall back to the slow portable C code.
+          # (GCC >= 6.3 is not affected, so this is only applied for clang.)
           sed -i -E 's/^(#[[:space:]]*if[[:space:]]+)HAS_GNUC\(6, 3\)[[:space:]]*$/\1(HAS_GNUC(6, 3) || defined(__clang__))/' librhash/byte_order.c
           echo "--- patched region ---"
           grep -n -B1 -A3 'RHASH_CPUIDEX(id, sub_id, regs)' librhash/byte_order.c | head -12
@@ -52,7 +76,7 @@ jobs:
         working-directory: RHash
         run: |
           ./configure \
-            --cc=clang \
+            --cc=${{ matrix.cc }} \
             --disable-openssl \
             --disable-gettext \
             --enable-static \
@@ -67,10 +91,10 @@ jobs:
         working-directory: RHash
         run: |
           ls -l rhash.exe
-          echo "--- DLL dependencies (should be system DLLs only) ---"
+          echo "--- DLL dependencies (should be Windows system DLLs only) ---"
           objdump -p rhash.exe | grep "DLL Name"
-          if objdump -p rhash.exe | grep -qi "librhash.dll"; then
-            echo "::error::rhash.exe still depends on librhash.dll (not statically linked)"
+          if objdump -p rhash.exe | grep -Ei "DLL Name: *(librhash|libwinpthread|libgcc|libstdc|libc\+\+|libunwind|msys-)"; then
+            echo "::error::rhash.exe depends on a non-system DLL (not statically linked)"
             exit 1
           fi
           echo "--- run before stripping ---"
@@ -79,24 +103,27 @@ jobs:
       - name: Strip and verify
         working-directory: RHash
         run: |
-          # LLVM's strip handles lld-linked PE files; GNU strip can corrupt them
-          if command -v llvm-strip >/dev/null; then
-            llvm-strip --strip-all rhash.exe
-          else
-            strip --strip-all rhash.exe
-          fi
+          # clang64: LLVM's strip (GNU strip can corrupt lld-linked PE files)
+          # ucrt64/mingw64: GNU strip from binutils
+          ${{ matrix.strip }} --strip-all rhash.exe
           ls -l rhash.exe
           echo "--- run after stripping ---"
           ./rhash.exe --version
-          echo "--- self-test: SHA-256 of 'abc' ---"
+          echo "--- self-test: SHA-256 of 'abc' (expect ba7816bf...) ---"
           printf 'abc' | ./rhash.exe --sha256 -
 
-      - name: Benchmark SHA-256
+      - name: Benchmark
         working-directory: RHash
         run: |
-          # ~300 MBps = portable C code; >1000 MBps = SHA-NI is active.
-          # (Informational only: depends on the runner's CPU.)
-          ./rhash.exe --benchmark --sha256 || true
+          # Informational only; depends on the runner's CPU.
+          # SHA-256: ~300 MBps = portable C code, >1000 MBps = SHA-NI active.
+          {
+            echo "### ${{ matrix.name }}"
+            echo '```'
+            ./rhash.exe --benchmark --sha256 | tail -n 1
+            ./rhash.exe --benchmark --gost12-256 | tail -n 1
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY" || true
 
       - name: Package
         working-directory: RHash
@@ -111,6 +138,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rhash-win64-clang-stripped
+          name: rhash-win64-${{ matrix.name }}-stripped
           path: dist/
           if-no-files-found: error
