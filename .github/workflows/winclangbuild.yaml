@@ -7,7 +7,6 @@ on:
         description: "rhash/RHash branch, tag or commit to build"
         default: "master"
         required: true
-
 permissions:
   contents: read
 
@@ -29,6 +28,7 @@ jobs:
             git
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-binutils
+            mingw-w64-clang-x86_64-llvm
 
       - name: Clone rhash/RHash
         uses: actions/checkout@v4
@@ -50,17 +50,29 @@ jobs:
         working-directory: RHash
         run: make -j"$(nproc)" build
 
+      - name: Inspect unstripped binary
+        working-directory: RHash
+        run: |
+          ls -l rhash.exe
+          echo "--- DLL dependencies (should be system DLLs only) ---"
+          objdump -p rhash.exe | grep "DLL Name"
+          echo "--- run before stripping ---"
+          ./rhash.exe --version; echo "exit code: $?"
+
       - name: Strip and verify
         working-directory: RHash
         run: |
-          strip --strip-all rhash.exe
-          echo "--- version ---"
+          # LLVM's strip handles lld-linked PE files; GNU strip can corrupt them
+          if command -v llvm-strip >/dev/null; then
+            llvm-strip --strip-all rhash.exe
+          else
+            strip --strip-all rhash.exe
+          fi
+          ls -l rhash.exe
+          echo "--- run after stripping ---"
           ./rhash.exe --version
-          echo "--- DLL dependencies (should be system DLLs only) ---"
-          objdump -p rhash.exe | grep "DLL Name"
           echo "--- self-test: SHA-256 of 'abc' ---"
           printf 'abc' | ./rhash.exe --sha256 -
-          ls -l rhash.exe
 
       - name: Package
         working-directory: RHash
