@@ -17,7 +17,7 @@ jobs:
         msbuild-architecture: x64
 
     - name: Build solution (Release x64)
-      run: msbuild build\vc-2010\rhash.vcxproj /p:Configuration=Release /p:Platform=x64
+      run: msbuild build\vc-2010\rhash.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /p:WindowsTargetPlatformVersion=10.0
 
     - name: Upload build artifacts
       if: success()
