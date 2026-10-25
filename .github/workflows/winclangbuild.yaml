@@ -7,6 +7,7 @@ on:
         description: "rhash/RHash branch, tag or commit to build"
         default: "master"
         required: true
+
 permissions:
   contents: read
 
@@ -43,8 +44,9 @@ jobs:
             --cc=clang \
             --disable-openssl \
             --disable-gettext \
-            --extra-cflags="-O2" \
-            --extra-ldflags="-static"
+            --enable-static \
+            --disable-lib-shared \
+            --extra-cflags="-O2"
 
       - name: Build
         working-directory: RHash
@@ -56,6 +58,10 @@ jobs:
           ls -l rhash.exe
           echo "--- DLL dependencies (should be system DLLs only) ---"
           objdump -p rhash.exe | grep "DLL Name"
+          if objdump -p rhash.exe | grep -qi "librhash.dll"; then
+            echo "::error::rhash.exe still depends on librhash.dll (not statically linked)"
+            exit 1
+          fi
           echo "--- run before stripping ---"
           ./rhash.exe --version; echo "exit code: $?"
 
