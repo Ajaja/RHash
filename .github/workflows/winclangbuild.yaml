@@ -7,9 +7,6 @@ on:
         description: "rhash/RHash branch, tag or commit to build"
         default: "master"
         required: true
-  push:
-    paths:
-      - ".github/workflows/build-rhash.yml"
 
 permissions:
   contents: read
